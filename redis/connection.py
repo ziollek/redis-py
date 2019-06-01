@@ -397,7 +397,7 @@ class HiredisParser(BaseParser):
             raise
         finally:
             if not block:
-                sock.settimeout(self.socket_timeout)
+                sock.settimeout(self._socket_timeout)
 
     def read_response(self):
         if not self._reader:
