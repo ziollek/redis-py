@@ -645,7 +645,7 @@ class Connection(object):
             self.disconnect()
             raise TimeoutError("Timeout reading from %s:%s" %
                                (self.host, self.port))
-        except (socket.error, ConnectionError):
+        except socket.error:
             self.disconnect()
             e = sys.exc_info()[1]
             raise ConnectionError("Error while reading from %s:%s : %s" %
