@@ -140,7 +140,7 @@ class SocketBuffer(object):
         return self.bytes_written - self.bytes_read
 
     def _read_from_socket(self, length=None, timeout=SENTINEL,
-                          raise_on_socket_error=True):
+                          raise_on_timeout=True):
         sock = self._sock
         socket_read_size = self.socket_read_size
         buf = self._buffer
@@ -155,9 +155,7 @@ class SocketBuffer(object):
                 data = recv(self._sock, socket_read_size)
                 # an empty string indicates the server shutdown the socket
                 if isinstance(data, bytes) and len(data) == 0:
-                    if raise_on_socket_error:
-                        raise socket.error(SERVER_CLOSED_CONNECTION_ERROR)
-                    return False
+                    raise ConnectionError(SERVER_CLOSED_CONNECTION_ERROR)
                 buf.write(data)
                 data_length = len(data)
                 self.bytes_written += data_length
@@ -171,7 +169,11 @@ class SocketBuffer(object):
             # blocking error, simply return False indicating that
             # there's no data to be read. otherwise raise the
             # original exception.
-            if raise_on_socket_error or ex.errno != EWOULDBLOCK:
+            if raise_on_timeout or ex.errno != EWOULDBLOCK:
+                raise
+            return False
+        except socket.timeout:
+            if raise_on_timeout:
                 raise
             return False
         finally:
@@ -181,7 +183,7 @@ class SocketBuffer(object):
     def can_read(self, timeout):
         return bool(self.length) or \
             self._read_from_socket(timeout=timeout,
-                                   raise_on_socket_error=False)
+                                   raise_on_timeout=False)
 
     def read(self, length):
         length = length + 2  # make sure to read the \r\n terminator
@@ -368,10 +370,10 @@ class HiredisParser(BaseParser):
             self._next_response = self._reader.gets()
             if self._next_response is False:
                 return self.read_from_socket(timeout=timeout,
-                                             raise_on_socket_error=False)
+                                             raise_on_timeout=False)
         return True
 
-    def read_from_socket(self, timeout=SENTINEL, raise_on_socket_error=True):
+    def read_from_socket(self, timeout=SENTINEL, raise_on_timeout=True):
         sock = self._sock
         custom_timeout = timeout is not SENTINEL
         try:
@@ -380,17 +382,13 @@ class HiredisParser(BaseParser):
             if HIREDIS_USE_BYTE_BUFFER:
                 bufflen = recv_into(self._sock, self._buffer)
                 if bufflen == 0:
-                    if raise_on_socket_error:
-                        raise socket.error(SERVER_CLOSED_CONNECTION_ERROR)
-                    return False
+                    raise ConnectionError(SERVER_CLOSED_CONNECTION_ERROR)
                 self._reader.feed(self._buffer, 0, bufflen)
             else:
                 buffer = recv(self._sock, self.socket_read_size)
                 # an empty string indicates the server shutdown the socket
                 if not isinstance(buffer, bytes) or len(buffer) == 0:
-                    if raise_on_socket_error:
-                        raise socket.error(SERVER_CLOSED_CONNECTION_ERROR)
-                    return False
+                    raise ConnectionError(SERVER_CLOSED_CONNECTION_ERROR)
                 self._reader.feed(buffer)
             # data was read from the socket and added to the buffer.
             # return True to indicate that data was read.
@@ -400,7 +398,11 @@ class HiredisParser(BaseParser):
             # blocking error, simply return False indicating that
             # there's no data to be read. otherwise raise the
             # original exception.
-            if raise_on_socket_error or ex.errno != EWOULDBLOCK:
+            if raise_on_timeout or ex.errno != EWOULDBLOCK:
+                raise
+            return False
+        except socket.timeout:
+            if not raise_on_timeout:
                 raise
             return False
         finally:
@@ -643,7 +645,7 @@ class Connection(object):
             self.disconnect()
             raise TimeoutError("Timeout reading from %s:%s" %
                                (self.host, self.port))
-        except socket.error:
+        except (socket.error, ConnectionError):
             self.disconnect()
             e = sys.exc_info()[1]
             raise ConnectionError("Error while reading from %s:%s : %s" %
@@ -1007,7 +1009,10 @@ class ConnectionPool(object):
             # a command. if not, the connection was either returned to the
             # pool before all data has been read or the socket has been
             # closed. either way, reconnect and verify everything is good.
-            if connection.can_read():
+            try:
+                if connection.can_read():
+                    raise ConnectionError('Connection has data')
+            except ConnectionError:
                 connection.disconnect()
                 connection.connect()
                 if connection.can_read():
@@ -1155,7 +1160,10 @@ class BlockingConnectionPool(ConnectionPool):
             # a command. if not, the connection was either returned to the
             # pool before all data has been read or the socket has been
             # closed. either way, reconnect and verify everything is good.
-            if connection.can_read():
+            try:
+                if connection.can_read():
+                    raise ConnectionError('Connection has data')
+            except ConnectionError:
                 connection.disconnect()
                 connection.connect()
                 if connection.can_read():
