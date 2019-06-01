@@ -367,7 +367,8 @@ class HiredisParser(BaseParser):
         if self._next_response is False:
             self._next_response = self._reader.gets()
             if self._next_response is False:
-                return self.read_from_socket(timeout=timeout)
+                return self.read_from_socket(timeout=timeout,
+                                             raise_on_socket_error=False)
         return True
 
     def read_from_socket(self, timeout=SENTINEL, raise_on_socket_error=True):
